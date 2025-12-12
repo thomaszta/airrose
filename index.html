@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#000000">
+    <title>Air Rose: Botanist</title>
+    <style>
+        :root { 
+            --font: "SF Pro Display", "SF Pro Text", -apple-system, serif;
+            --glass: rgba(20, 20, 20, 0.8);
+            --border: rgba(255, 255, 255, 0.15);
+        }
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: #000; overflow: hidden;
+            font-family: var(--font);
+            -webkit-user-select: none; user-select: none;
+            touch-action: none; color: #fff;
+        }
+        canvas { display: block; width: 100%; height: 100%; }
+
+        /* UI */
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 10;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+        }
+
+        /* 状态指示 */
+        .status-text {
+            position: absolute; top: 15%; width: 100%; text-align: center;
+            opacity: 0; transform: translateY(-10px); transition: all 0.5s;
+        }
+        .status-main { font-size: 14px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.6); }
+        .status-val { font-family: "SF Mono", monospace; font-size: 12px; color: rgba(255,255,255,0.4); margin-top: 5px; }
+
+        /* 引导大标题 */
+        .hero {
+            text-align: center; transition: opacity 0.6s;
+        }
+        .hero-title { font-size: 32px; font-weight: 300; letter-spacing: 4px; margin-bottom: 8px; }
+        .hero-sub { font-size: 14px; color: rgba(255,255,255,0.5); font-weight: 400; }
+
+        /* 结果卡片 */
+        #botany-card {
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            padding: 40px 20px 60px 20px;
+            background: linear-gradient(to top, #000 10%, transparent);
+            display: flex; flex-direction: column; align-items: center;
+            opacity: 0; transform: translateY(20px); pointer-events: none;
+            transition: all 1s cubic-bezier(0.19, 1, 0.22, 1);
+            box-sizing: border-box;
+        }
+        #botany-card.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+
+        .flower-name-cn { font-size: 28px; font-weight: 600; margin-bottom: 4px; letter-spacing: 2px; text-shadow: 0 0 20px rgba(255,255,255,0.3); }
+        .flower-name-en { font-size: 14px; color: rgba(255,255,255,0.6); font-style: italic; font-family: "New York", serif; margin-bottom: 20px; }
+        
+        .tags { display: flex; gap: 8px; margin-bottom: 30px; }
+        .tag {
+            font-size: 10px; padding: 4px 10px; border-radius: 100px;
+            background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);
+            color: rgba(255,255,255,0.7);
+        }
+
+        .btn-restart {
+            width: 50px; height: 50px; border-radius: 50%;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            display: flex; justify-content: center; align-items: center;
+            cursor: pointer; backdrop-filter: blur(10px);
+        }
+        .btn-restart svg { width: 20px; height: 20px; fill: #fff; opacity: 0.8; }
+        
+        /* 交互遮罩 */
+        #touch { position: absolute; width: 100%; height: 100%; z-index: 20; }
+        
+        .fade-in { opacity: 1; transform: translateY(0); }
+        .hidden { opacity: 0 !important; pointer-events: none; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <!-- 顶部实时数据 -->
+        <div id="hud" class="status-text">
+            <div class="status-main">Collecting DNA</div>
+            <div class="status-val" id="dna-debug">S:0 | R:0 | E:0</div>
+        </div>
+
+        <!-- 中心引导 -->
+        <div id="guide" class="hero">
+            <div class="hero-title">AIR ROSE</div>
+            <div class="hero-sub">Tap to Discover Nature</div>
+        </div>
+
+        <!-- 结果展示 -->
+        <div id="botany-card">
+            <div class="flower-name-cn" id="f-cn">未知花卉</div>
+            <div class="flower-name-en" id="f-en">Unknown Flora</div>
+            <div class="tags">
+                <div class="tag" id="t-rare">RARE</div>
+                <div class="tag" id="t-type">Double</div>
+                <div class="tag" id="t-color">Red</div>
+            </div>
+            <div class="btn-restart" id="btn-again">
+                <svg viewBox="0 0 24 24"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+            </div>
+        </div>
+    </div>
+
+    <div id="touch"></div>
+    <canvas id="stage"></canvas>
+
+<script>
+/**
+ * Air Rose: Botanist Edition
+ * 120+ Real Flowers Database matched via Motion Analysis
+ */
+
+// --- 1. 植物学数据库 (The Botanical Database) ---
+// h: hue (approx), t: type (0:simple/round, 1:complex/layered, 2:spiky/jagged)
+// l: layers (complexity level 1-5)
+const FLORA = [
+    // --- RED / PINK (Warm, High Energy) ---
+    {n:"红玫瑰", e:"Rosa Red", h:350, t:1, l:4},
+    {n:"牡丹", e:"Peony", h:340, t:1, l:5},
+    {n:"山茶花", e:"Camellia", h:355, t:0, l:3},
+    {n:"朱顶红", e:"Amaryllis", h:0, t:0, l:2},
+    {n:"虞美人", e:"Corn Poppy", h:10, t:0, l:1},
+    {n:"康乃馨", e:"Carnation", h:345, t:2, l:4},
+    {n:"大丽花", e:"Dahlia", h:330, t:2, l:5},
+    {n:"杜鹃", e:"Azalea", h:335, t:1, l:3},
+    {n:"扶桑", e:"Hibiscus", h:355, t:0, l:1},
+    {n:"荷包牡丹", e:"Bleeding Heart", h:330, t:0, l:2},
+    {n:"海棠", e:"Begonia", h:345, t:0, l:2},
+    {n:"石蒜", e:"Red Spider Lily", h:0, t:2, l:2}, // Spiky
+    {n:"千日红", e:"Globe Amaranth", h:320, t:1, l:4},
+    {n:"蜀葵", e:"Hollyhock", h:340, t:0, l:2},
+    {n:"报春花", e:"Primrose", h:330, t:0, l:2},
+    {n:"洋红风铃木", e:"Tabebuia", h:310, t:1, l:2},
+    {n:"桃花", e:"Peach Blossom", h:350, t:0, l:1},
+    {n:"樱花", e:"Cherry Blossom", h:340, t:0, l:1},
+    {n:"莲花", e:"Lotus", h:320, t:0, l:3},
+    {n:"睡莲", e:"Water Lily", h:310, t:2, l:4},
+    
+    // --- ORANGE / YELLOW (Bright, Mid Energy) ---
+    {n:"向日葵", e:"Sunflower", h:45, t:1, l:2},
+    {n:"金盏花", e:"Marigold", h:35, t:2, l:5},
+    {n:"郁金香", e:"Tulip", h:25, t:0, l:1},
+    {n:"水仙", e:"Narcissus", h:50, t:0, l:2},
+    {n:"菊花", e:"Chrysanthemum", h:40, t:2, l:5},
+    {n:"非洲菊", e:"Gerbera", h:20, t:0, l:2},
+    {n:"腊梅", e:"Wintersweet", h:55, t:0, l:1},
+    {n:"桂花", e:"Osmanthus", h:48, t:0, l:1},
+    {n:"金莲花", e:"Nasturtium", h:30, t:0, l:1},
+    {n:"萱草", e:"Daylily", h:35, t:0, l:2},
+    {n:"加州罂粟", e:"California Poppy", h:38, t:0, l:1},
+    {n:"毛茛", e:"Ranunculus", h:40, t:1, l:5}, // Layered
+    {n:"蒲公英", e:"Dandelion", h:50, t:2, l:4},
+    {n:"连翘", e:"Forsythia", h:58, t:0, l:1},
+    {n:"金丝桃", e:"Hypericum", h:52, t:2, l:2},
+
+    // --- BLUE / PURPLE (Cool, Low Energy) ---
+    {n:"鸢尾花", e:"Iris", h:250, t:2, l:2},
+    {n:"紫罗兰", e:"Violet", h:270, t:0, l:2},
+    {n:"薰衣草", e:"Lavender", h:260, t:2, l:3},
+    {n:"绣球花", e:"Hydrangea", h:230, t:1, l:4},
+    {n:"牵牛花", e:"Morning Glory", h:250, t:0, l:1},
+    {n:"矢车菊", e:"Cornflower", h:220, t:2, l:3},
+    {n:"勿忘我", e:"Forget-me-not", h:210, t:0, l:1},
+    {n:"铁线莲", e:"Clematis", h:265, t:2, l:2},
+    {n:"风信子", e:"Hyacinth", h:260, t:1, l:3},
+    {n:"桔梗", e:"Balloon Flower", h:240, t:0, l:1},
+    {n:"紫藤", e:"Wisteria", h:275, t:1, l:3},
+    {n:"飞燕草", e:"Delphinium", h:230, t:2, l:4},
+    {n:"番红花", e:"Crocus", h:280, t:0, l:1},
+    {n:"紫苑", e:"Aster", h:265, t:2, l:3},
+    {n:"蓟花", e:"Thistle", h:290, t:2, l:3},
+    {n:"蓝雪花", e:"Plumbago", h:215, t:0, l:2},
+    {n:"美女樱", e:"Verbena", h:285, t:1, l:2},
+    {n:"醉鱼草", e:"Buddleja", h:270, t:2, l:3},
+    
+    // --- WHITE / PALE (Special) ---
+    {n:"白玫瑰", e:"Rosa White", h:180, t:1, l:4, sat: 10},
+    {n:"栀子花", e:"Gardenia", h:60, t:1, l:4, sat: 15},
+    {n:"茉莉", e:"Jasmine", h:80, t:0, l:1, sat: 10},
+    {n:"百合", e:"Lily", h:100, t:0, l:2, sat: 10},
+    {n:"昙花", e:"Queen of Night", h:200, t:2, l:4, sat: 5},
+    {n:"铃兰", e:"Lily of the Valley", h:120, t:0, l:1, sat: 10},
+    {n:"洋甘菊", e:"Chamomile", h:50, t:0, l:2, sat: 20}
+];
+
+// --- 2. 核心逻辑与配置 ---
+const CFG = {
+    colors: {
+        cold: { h: 220, s: 80, l: 65 },
+        warm: { h: 340, s: 90, l: 60 },
+        mid:  { h: 45,  s: 95, l: 65 }
+    },
+    holdTime: 800
+};
+
+// 全局变量
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d', { alpha: false });
+let W, H, CX, CY, DPR;
+let state = 0; // 0:Ready, 1:Collect, 2:Wait, 3:Bloom
+let bloomProgress = 0;
+
+// 采集数据
+let data = {
+    rot: 0,     // 自旋角度 (复杂度)
+    shake: 0,   // 抖动次数 (边缘粗糙度)
+    energy: 0,  // 挥动总能 (色相)
+    samples: 0
+};
+
+// 最终生成的花朵对象
+let targetFlower = null;
+let visualParams = { points: [], hue: 0 };
+
+// DOM
+const ui = {
+    hud: document.getElementById('hud'),
+    debug: document.getElementById('dna-debug'),
+    guide: document.getElementById('guide'),
+    card: document.getElementById('botany-card'),
+    touch: document.getElementById('touch'),
+    fCn: document.getElementById('f-cn'),
+    fEn: document.getElementById('f-en'),
+    tags: {
+        type: document.getElementById('t-type'),
+        color: document.getElementById('t-color'),
+        rare: document.getElementById('t-rare')
+    },
+    btn: document.getElementById('btn-again')
+};
+
+// --- 3. 系统初始化 ---
+function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    DPR = Math.min(window.devicePixelRatio || 2, 3);
+    canvas.width = W * DPR;
+    canvas.height = H * DPR;
+    CX = canvas.width / 2;
+    CY = canvas.height / 2;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// --- 4. 交互流程 ---
+ui.touch.addEventListener('click', async () => {
+    if (state !== 0) return;
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        try { await DeviceMotionEvent.requestPermission(); } catch(e){}
+    }
+    startCollect();
+});
+
+ui.btn.addEventListener('click', reset);
+
+function startCollect() {
+    state = 1;
+    ui.guide.style.opacity = 0;
+    ui.touch.style.display = 'none';
+    ui.hud.classList.add('fade-in');
+    
+    // Reset Data
+    data = { rot: 0, shake: 0, energy: 0, samples: 0 };
+    
+    window.addEventListener('devicemotion', onMotion);
+    window.addEventListener('deviceorientation', onOrient);
+    loop();
+}
+
+function reset() {
+    state = 1;
+    bloomProgress = 0;
+    ui.card.classList.remove('show');
+    ui.hud.classList.add('fade-in');
+    data = { rot: 0, shake: 0, energy: 0, samples: 0 };
+}
+
+// --- 5. 传感器分析 (Gene Sequencing) ---
+let lastTime = Date.now();
+let shakeCool = 0;
+
+function onMotion(e) {
+    if (state !== 1) return;
+    const now = Date.now();
+    const dt = (now - lastTime) / 1000;
+    lastTime = now;
+
+    const acc = e.acceleration;
+    const rot = e.rotationRate;
+    if (!acc || !rot) return;
+
+    // 1. 采集自旋 (Spins -> Layers)
+    if (Math.abs(rot.alpha) > 10) data.rot += Math.abs(rot.alpha * dt);
+
+    // 2. 采集抖动 (Shakes -> Texture)
+    if (shakeCool > 0) shakeCool -= dt;
+    if ((Math.abs(acc.y) > 9 || Math.abs(acc.x) > 9) && shakeCool <= 0) {
+        data.shake++;
+        shakeCool = 0.2;
+    }
+
+    // 3. 采集能量 (Energy -> Color)
+    const mag = Math.abs(acc.x) + Math.abs(acc.y) + Math.abs(acc.z);
+    data.energy += mag;
+    data.samples++;
+
+    // Debug UI
+    if (data.samples % 10 === 0) {
+        ui.debug.innerText = `S:${(data.rot/360).toFixed(1)} | R:${data.shake} | E:${Math.floor(data.energy/10)}`;
+    }
+    
+    if (mag > 3) spawnParticle();
+}
+
+let stableStart = 0;
+function onOrient(e) {
+    const b = Math.abs(e.beta || 0);
+    const g = Math.abs(e.gamma || 0);
+
+    if (state === 1 && data.samples > 50) {
+        if (b < 15 && g < 15) {
+            state = 2; // Wait
+            stableStart = Date.now();
+            ui.hud.classList.remove('fade-in'); // Hide HUD
+        }
+    } else if (state === 2) {
+        if (b > 20 || g > 20) {
+            state = 1; // Moved
+            ui.hud.classList.add('fade-in');
+            return;
+        }
+        if (Date.now() - stableStart > CFG.holdTime) {
+            matchAndBloom();
+        }
+    }
+}
+
+// --- 6. 核心匹配算法 (The Botanist Logic) ---
+
+function matchAndBloom() {
+    state = 3;
+    
+    // Normalize Inputs
+    const avgEnergy = data.energy / data.samples; // 0 ~ 20+
+    const totalSpins = data.rot / 360; // 0 ~ 10+
+    const totalShakes = data.shake; // 0 ~ 50+
+
+    // 1. Determine Target Hue Group
+    // Low E -> Blue (200-280), Mid E -> Yellow (30-60), High E -> Red (330-360 / 0-20)
+    let targetHue = 0;
+    if (avgEnergy < 3) targetHue = 240; // Blue/Purple
+    else if (avgEnergy < 6) targetHue = 45; // Yellow/White
+    else targetHue = 350; // Red/Pink
+
+    // 2. Determine Complexity (Layers)
+    // 0 spins -> Level 1-2. 5+ spins -> Level 5.
+    let targetLevel = Math.min(5, Math.max(1, Math.floor(1 + totalSpins)));
+
+    // 3. Determine Texture Type
+    // 0 shakes -> 0 (Round). 15+ shakes -> 2 (Spiky).
+    let targetType = 0;
+    if (totalShakes > 15) targetType = 2;
+    else if (totalShakes > 5) targetType = 1;
+
+    // --- Search Logic ---
+    let bestMatch = null;
+    let minScore = Infinity;
+
+    FLORA.forEach(f => {
+        // Hue Distance (handle circular hue 0/360)
+        let dh = Math.abs(f.h - targetHue);
+        if (dh > 180) dh = 360 - dh;
+        
+        // Type Distance
+        let dt = Math.abs(f.t - targetType);
+        
+        // Layer Distance
+        let dl = Math.abs(f.l - targetLevel);
+
+        // Weighted Score (Hue is most important, then Type, then Layers)
+        // Adjust weights to prefer color match first
+        let score = (dh * 1) + (dt * 50) + (dl * 30);
+        
+        // Random factor to prevent always same result for same motion
+        score += Math.random() * 20; 
+
+        if (score < minScore) {
+            minScore = score;
+            bestMatch = f;
+        }
+    });
+
+    targetFlower = bestMatch;
+    generateGeometry(targetFlower, totalShakes);
+    updateUI(targetFlower);
+}
+
+function updateUI(f) {
+    ui.fCn.innerText = f.n;
+    ui.fEn.innerText = f.e;
+    
+    // Tags
+    ui.tags.type.innerText = f.t === 2 ? "Spiky" : (f.t === 1 ? "Complex" : "Simple");
+    
+    let cText = "Color";
+    if (f.h > 320 || f.h < 20) cText = "Red/Pink";
+    else if (f.h > 200 && f.h < 290) cText = "Blue/Purple";
+    else if (f.h >= 20 && f.h <= 80) cText = "Yellow/Gold";
+    else cText = "White/Pale";
+    ui.tags.color.innerText = cText;
+
+    // Rare logic: if it matches perfectly complex or spiky
+    ui.tags.rare.style.display = (f.l >= 4 || f.t === 2) ? "block" : "none";
+}
+
+function generateGeometry(f, inputChaos) {
+    visualParams.hue = f.h;
+    visualParams.points = [];
+    
+    // Convert Flower Attributes to Visual Parameters
+    const layers = 20 + f.l * 15; // 35 to 95 layers
+    const k = f.t === 0 ? 3 : (f.t === 2 ? 7 + Math.random() : 5); // Petal count factor
+    const roughness = f.t === 2 ? 0.3 : (f.t === 1 ? 0.1 : 0.02); // Noise amplitude
+    const noiseFreq = f.t === 2 ? 15 : 5; 
+
+    // Add user's specific input entropy to make it unique even for same flower
+    const userNoise = Math.min(0.5, inputChaos * 0.01); 
+
+    const maxR = Math.min(W, H) * DPR * 0.4;
+
+    for (let l = 0; l < layers; l++) {
+        let pts = [];
+        const lp = l / layers;
+        const rBase = maxR * Math.pow(lp, 0.8);
+
+        for (let i = 0; i < 120; i++) {
+            const th = (i / 120) * Math.PI * 2;
+            
+            // Base Rose Curve
+            let r = Math.sin(k * th + (l*0.05));
+            
+            // Texture/Type Modifier
+            let noise = Math.sin(noiseFreq * th) * (roughness + userNoise);
+            
+            // Combine
+            // Spiky flowers have negative noise clipping
+            if (f.t === 2) noise = Math.abs(noise); 
+            
+            const def = r + noise;
+            const finalR = rBase + def * (maxR * 0.15 * (1-lp));
+            
+            pts.push({
+                x: finalR * Math.cos(th),
+                y: finalR * Math.sin(th),
+                off: l * 0.02 // spin offset
+            });
+        }
+        visualParams.points.push(pts);
+    }
+}
+
+// --- 7. 渲染循环 ---
+
+let particles = [];
+function spawnParticle() {
+    particles.push({
+        x: (Math.random()-0.5)*W*0.6, y: (Math.random()-0.5)*H*0.6,
+        vx: (Math.random()-0.5)*5, vy: (Math.random()-0.5)*5,
+        life: 1
+    });
+}
+
+function loop() {
+    requestAnimationFrame(loop);
+
+    if (state === 1) {
+        // Collect Mode
+        ctx.fillStyle = 'rgba(0,0,0,0.2)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = '#fff';
+        for(let i=particles.length-1; i>=0; i--) {
+            let p = particles[i];
+            ctx.globalAlpha = p.life;
+            ctx.beginPath(); ctx.arc(CX+p.x*DPR, CY+p.y*DPR, 1.5*DPR, 0, Math.PI*2); ctx.fill();
+            p.x+=p.vx; p.y+=p.vy; p.life-=0.05;
+            if(p.life<=0) particles.splice(i,1);
+        }
+    } else {
+        // Bloom Mode
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        if (state >= 3) {
+            if (state === 3) {
+                bloomProgress += (1 - bloomProgress) * 0.01;
+                if (bloomProgress > 0.99) {
+                    state = 4;
+                    ui.card.classList.add('show');
+                }
+            } else {
+                bloomProgress = 1 + Math.sin(Date.now() / 2000) * 0.02;
+            }
+            renderFlower(bloomProgress);
+        }
+    }
+}
+
+function renderFlower(pr) {
+    ctx.save();
+    ctx.translate(CX, CY);
+    
+    // Silk Glow Effect
+    ctx.globalCompositeOperation = 'lighter';
+
+    const layers = visualParams.points;
+    const count = Math.floor(layers.length * Math.min(1, pr));
+    
+    // Saturation adjustment for White/Pale flowers
+    const sat = targetFlower.sat !== undefined ? targetFlower.sat : 80;
+
+    for (let i = 0; i < count; i++) {
+        const pts = layers[i];
+        const lp = i / layers.length;
+        
+        // Opacity gradient
+        const alpha = 0.08 + (0.4 * (1-lp)) * Math.min(1, pr);
+        
+        // Color Gradient (Inner -> Outer)
+        const hue = visualParams.hue + (i%2)*5;
+        const lig = 30 + 50 * (1-lp);
+        
+        ctx.strokeStyle = `hsla(${hue}, ${sat}%, ${lig}%, ${alpha})`;
+        ctx.lineWidth = 1.5 * DPR;
+        
+        ctx.beginPath();
+        // Subtle Rotation
+        const rot = (Date.now() / 8000) * (1 - lp * 0.5) + pts[0].off;
+        
+        // Expansion
+        const scale = Math.max(0, pr * 1.5 - (lp * 0.5));
+        
+        if (scale > 0) {
+            for (let j = 0; j < pts.length; j++) {
+                const p = pts[j];
+                const x = (p.x * Math.cos(rot) - p.y * Math.sin(rot)) * scale;
+                const y = (p.x * Math.sin(rot) + p.y * Math.cos(rot)) * scale;
+                if (j===0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+            ctx.stroke();
+        }
+    }
+    
+    // Core Glow
+    if (pr > 0.5) {
+        ctx.globalCompositeOperation = 'source-over';
+        const g = ctx.createRadialGradient(0, 0, 0, 0, 0, W*0.2);
+        g.addColorStop(0, `hsla(${visualParams.hue}, ${sat}%, 80%, 0.15)`);
+        g.addColorStop(1, `rgba(0,0,0,0)`);
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(0, 0, W*0.25, 0, Math.PI*2); ctx.fill();
+    }
+    
+    ctx.restore();
+}
+
+</script>
+</body>
+</html>
